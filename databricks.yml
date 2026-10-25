@@ -1,0 +1,27 @@
+bundle:
+  name: program_ops_showcase
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog:
+    description: Unity Catalog catalog
+    default: workspace
+  schema:
+    description: Unity Catalog schema
+    default: program_ops
+  lakebase_endpoint:
+    description: Lakebase Postgres endpoint holding the outbox
+    default: projects/program-ops/branches/production/endpoints/primary
+  llm_endpoint:
+    description: Foundation Model endpoint for the AI summary (no Claude endpoint on Free Edition)
+    default: databricks-llama-4-maverick
+  warehouse_id:
+    description: SQL warehouse for the dashboard
+    default: 4d17985a38c8b978
+
+targets:
+  dev:
+    mode: development
+    default: true

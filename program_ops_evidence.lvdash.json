@@ -1,0 +1,936 @@
+{
+  "datasets": [
+    {
+      "name": "ds_kpis",
+      "displayName": "kpis",
+      "queryLines": [
+        "WITH latest AS (SELECT max_by(run_id, ran_at) AS run_id FROM workspace.program_ops.test_results),\n",
+        "resolved AS (SELECT case_id, min(event_time) AS resolved_at FROM workspace.program_ops.audit_log WHERE event_type = 'CASE_RESOLVED' GROUP BY case_id)\n",
+        "SELECT\n",
+        "  (SELECT count_if(passed) FROM workspace.program_ops.test_results WHERE run_id = (SELECT run_id FROM latest)) AS tests_passed,\n",
+        "  (SELECT count(*) FROM workspace.program_ops.test_results WHERE run_id = (SELECT run_id FROM latest)) AS tests_total,\n",
+        "  (SELECT count(*) - count(DISTINCT idempotency_key) FROM workspace.program_ops.provider_deliveries) AS duplicate_deliveries,\n",
+        "  (SELECT count(*) FROM workspace.program_ops.outbox_log o LEFT JOIN resolved r USING (case_id)\n",
+        "     WHERE o.email_type = 'DECISION' AND (r.resolved_at IS NULL OR o.created_at < r.resolved_at)) AS early_status_sends,\n",
+        "  (SELECT count(*) FROM workspace.program_ops.outbox_attempts WHERE outcome = 'STOPPED_DUPLICATE') AS stopped_duplicates,\n",
+        "  (SELECT count(*) FROM workspace.program_ops.outbox_attempts WHERE outcome = 'BLOCKED_BY_GATE') AS blocked_by_gate\n"
+      ]
+    },
+    {
+      "name": "ds_timeline",
+      "displayName": "timeline",
+      "queryLines": [
+        "SELECT step, date_format(event_time, 'yyyy-MM-dd HH:mm') AS event_time, event_type, actor, actor_type, headline, details\n",
+        "FROM workspace.program_ops.case_timeline WHERE startup_id = 'STU-0427' AND run_context = 'STORY' ORDER BY step\n"
+      ]
+    },
+    {
+      "name": "ds_tests",
+      "displayName": "tests",
+      "queryLines": [
+        "SELECT test_no, test_name, CASE WHEN passed THEN 'PASS' ELSE 'FAIL' END AS result, assertions, ran_at\n",
+        "FROM workspace.program_ops.test_results WHERE run_id = (SELECT max_by(run_id, ran_at) FROM workspace.program_ops.test_results) ORDER BY test_no\n"
+      ]
+    },
+    {
+      "name": "ds_attempts",
+      "displayName": "attempts",
+      "queryLines": [
+        "SELECT a.attempt_id, date_format(a.attempted_at, 'yyyy-MM-dd HH:mm') AS attempted_at, c.run_context, c.startup_id, a.case_id,\n",
+        "       a.email_type, a.attempt_label, a.outcome, a.detail, o.state AS outbox_state, o.provider_message_id\n",
+        "FROM workspace.program_ops.outbox_attempts a LEFT JOIN workspace.program_ops.cases c USING (case_id)\n",
+        "LEFT JOIN workspace.program_ops.outbox_log o ON o.idempotency_key = a.idempotency_key\n",
+        "ORDER BY a.attempt_id\n"
+      ]
+    },
+    {
+      "name": "ds_records",
+      "displayName": "records",
+      "queryLines": [
+        "SELECT startup_id, startup_name, tracker_status, coalesce(tracker_stage, '(blank)') AS tracker_stage,\n",
+        "       date_format(tracker_updated_at, 'yyyy-MM-dd HH:mm') AS tracker_updated_at, tracker_updated_by, tracker_edit_kind,\n",
+        "       queue_status, date_format(queue_updated_at, 'yyyy-MM-dd HH:mm') AS queue_updated_at, queue_updated_by, queue_edit_kind\n",
+        "FROM workspace.program_ops.case_records_side_by_side ORDER BY startup_id\n"
+      ]
+    },
+    {
+      "name": "ds_cases",
+      "displayName": "cases",
+      "queryLines": [
+        "SELECT case_id, run_context, startup_id, case_state, reconciliation, final_status, resolved_by, escalated_to,\n",
+        "       needs_human_reason, suggested_reading\n",
+        "FROM workspace.program_ops.cases ORDER BY run_context, opened_at\n"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "evidence",
+      "displayName": "Evidence",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1",
+      "layout": [
+        {
+          "widget": {
+            "name": "title",
+            "multilineTextboxSpec": {
+              "lines": [
+                "# Program Ops: reconcile, hold, send once\n"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "subtitle",
+            "multilineTextboxSpec": {
+              "lines": [
+                "Fictional data: Soul Labs (STU-0427) has conflicting records. The founder is verified and acknowledged, the records are reconciled, and program lead Jimmy Woo decides; the drafted decision email is then sent exactly once.\n"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 1,
+            "width": 12,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi-tests",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpis",
+                  "fields": [
+                    {
+                      "name": "tests_passed",
+                      "expression": "`tests_passed`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "tests_passed",
+                  "displayName": "Tests passed"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Tests passed"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi-total",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpis",
+                  "fields": [
+                    {
+                      "name": "tests_total",
+                      "expression": "`tests_total`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "tests_total",
+                  "displayName": "Tests run"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Tests run"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi-dupes",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpis",
+                  "fields": [
+                    {
+                      "name": "duplicate_deliveries",
+                      "expression": "`duplicate_deliveries`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "duplicate_deliveries",
+                  "displayName": "Duplicate deliveries"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Duplicate deliveries"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi-early",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpis",
+                  "fields": [
+                    {
+                      "name": "early_status_sends",
+                      "expression": "`early_status_sends`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "early_status_sends",
+                  "displayName": "Decision emails before the lead decided"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Decision emails before the lead decided"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi-stopped",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpis",
+                  "fields": [
+                    {
+                      "name": "stopped_duplicates",
+                      "expression": "`stopped_duplicates`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "stopped_duplicates",
+                  "displayName": "Retries stopped (duplicate)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Retries stopped (duplicate)"
+              }
+            }
+          },
+          "position": {
+            "x": 8,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi-blocked",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpis",
+                  "fields": [
+                    {
+                      "name": "blocked_by_gate",
+                      "expression": "`blocked_by_gate`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "blocked_by_gate",
+                  "displayName": "Sends blocked by gate"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Sends blocked by gate"
+              }
+            }
+          },
+          "position": {
+            "x": 10,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "timeline",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_timeline",
+                  "fields": [
+                    {
+                      "name": "step",
+                      "expression": "`step`"
+                    },
+                    {
+                      "name": "event_time",
+                      "expression": "`event_time`"
+                    },
+                    {
+                      "name": "event_type",
+                      "expression": "`event_type`"
+                    },
+                    {
+                      "name": "actor",
+                      "expression": "`actor`"
+                    },
+                    {
+                      "name": "actor_type",
+                      "expression": "`actor_type`"
+                    },
+                    {
+                      "name": "headline",
+                      "expression": "`headline`"
+                    },
+                    {
+                      "name": "details",
+                      "expression": "`details`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "step",
+                    "displayName": "#"
+                  },
+                  {
+                    "fieldName": "event_time",
+                    "displayName": "Time (UTC)"
+                  },
+                  {
+                    "fieldName": "event_type",
+                    "displayName": "Event"
+                  },
+                  {
+                    "fieldName": "actor",
+                    "displayName": "Actor"
+                  },
+                  {
+                    "fieldName": "actor_type",
+                    "displayName": "Actor type"
+                  },
+                  {
+                    "fieldName": "headline",
+                    "displayName": "What happened"
+                  },
+                  {
+                    "fieldName": "details",
+                    "displayName": "Evidence (JSON)"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "STU-0427 case timeline (reviewer evidence)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 12,
+            "height": 9
+          }
+        },
+        {
+          "widget": {
+            "name": "records",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_records",
+                  "fields": [
+                    {
+                      "name": "startup_id",
+                      "expression": "`startup_id`"
+                    },
+                    {
+                      "name": "startup_name",
+                      "expression": "`startup_name`"
+                    },
+                    {
+                      "name": "tracker_status",
+                      "expression": "`tracker_status`"
+                    },
+                    {
+                      "name": "tracker_stage",
+                      "expression": "`tracker_stage`"
+                    },
+                    {
+                      "name": "tracker_updated_at",
+                      "expression": "`tracker_updated_at`"
+                    },
+                    {
+                      "name": "tracker_updated_by",
+                      "expression": "`tracker_updated_by`"
+                    },
+                    {
+                      "name": "tracker_edit_kind",
+                      "expression": "`tracker_edit_kind`"
+                    },
+                    {
+                      "name": "queue_status",
+                      "expression": "`queue_status`"
+                    },
+                    {
+                      "name": "queue_updated_at",
+                      "expression": "`queue_updated_at`"
+                    },
+                    {
+                      "name": "queue_updated_by",
+                      "expression": "`queue_updated_by`"
+                    },
+                    {
+                      "name": "queue_edit_kind",
+                      "expression": "`queue_edit_kind`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "startup_id",
+                    "displayName": "Startup"
+                  },
+                  {
+                    "fieldName": "startup_name",
+                    "displayName": "Name"
+                  },
+                  {
+                    "fieldName": "tracker_status",
+                    "displayName": "Tracker status"
+                  },
+                  {
+                    "fieldName": "tracker_stage",
+                    "displayName": "Tracker stage"
+                  },
+                  {
+                    "fieldName": "tracker_updated_at",
+                    "displayName": "Tracker updated"
+                  },
+                  {
+                    "fieldName": "tracker_updated_by",
+                    "displayName": "by"
+                  },
+                  {
+                    "fieldName": "tracker_edit_kind",
+                    "displayName": "edit"
+                  },
+                  {
+                    "fieldName": "queue_status",
+                    "displayName": "Queue status"
+                  },
+                  {
+                    "fieldName": "queue_updated_at",
+                    "displayName": "Queue updated"
+                  },
+                  {
+                    "fieldName": "queue_updated_by",
+                    "displayName": "by"
+                  },
+                  {
+                    "fieldName": "queue_edit_kind",
+                    "displayName": "edit"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Source records side by side (current)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 14,
+            "width": 12,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "tests",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_tests",
+                  "fields": [
+                    {
+                      "name": "test_no",
+                      "expression": "`test_no`"
+                    },
+                    {
+                      "name": "test_name",
+                      "expression": "`test_name`"
+                    },
+                    {
+                      "name": "result",
+                      "expression": "`result`"
+                    },
+                    {
+                      "name": "assertions",
+                      "expression": "`assertions`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "test_no",
+                    "displayName": "#"
+                  },
+                  {
+                    "fieldName": "test_name",
+                    "displayName": "Test"
+                  },
+                  {
+                    "fieldName": "result",
+                    "displayName": "Result"
+                  },
+                  {
+                    "fieldName": "assertions",
+                    "displayName": "Assertions"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Test results (latest run)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 18,
+            "width": 12,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "attempts-by-outcome",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_attempts",
+                  "fields": [
+                    {
+                      "name": "outcome",
+                      "expression": "`outcome`"
+                    },
+                    {
+                      "name": "count(attempt_id)",
+                      "expression": "COUNT(`attempt_id`)"
+                    },
+                    {
+                      "name": "email_type",
+                      "expression": "`email_type`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "outcome",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Outcome"
+                },
+                "y": {
+                  "fieldName": "count(attempt_id)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Attempts"
+                },
+                "color": {
+                  "fieldName": "email_type",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Email type"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Every send attempt, by outcome (tests + story)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 22,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "cases",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_cases",
+                  "fields": [
+                    {
+                      "name": "case_id",
+                      "expression": "`case_id`"
+                    },
+                    {
+                      "name": "run_context",
+                      "expression": "`run_context`"
+                    },
+                    {
+                      "name": "startup_id",
+                      "expression": "`startup_id`"
+                    },
+                    {
+                      "name": "case_state",
+                      "expression": "`case_state`"
+                    },
+                    {
+                      "name": "reconciliation",
+                      "expression": "`reconciliation`"
+                    },
+                    {
+                      "name": "final_status",
+                      "expression": "`final_status`"
+                    },
+                    {
+                      "name": "escalated_to",
+                      "expression": "`escalated_to`"
+                    },
+                    {
+                      "name": "needs_human_reason",
+                      "expression": "`needs_human_reason`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "case_id",
+                    "displayName": "Case"
+                  },
+                  {
+                    "fieldName": "run_context",
+                    "displayName": "Context"
+                  },
+                  {
+                    "fieldName": "startup_id",
+                    "displayName": "Startup"
+                  },
+                  {
+                    "fieldName": "case_state",
+                    "displayName": "State"
+                  },
+                  {
+                    "fieldName": "reconciliation",
+                    "displayName": "Reconciliation"
+                  },
+                  {
+                    "fieldName": "final_status",
+                    "displayName": "Final"
+                  },
+                  {
+                    "fieldName": "escalated_to",
+                    "displayName": "Escalated to"
+                  },
+                  {
+                    "fieldName": "needs_human_reason",
+                    "displayName": "Needs human"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "All cases"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 22,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "attempts",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_attempts",
+                  "fields": [
+                    {
+                      "name": "attempt_id",
+                      "expression": "`attempt_id`"
+                    },
+                    {
+                      "name": "attempted_at",
+                      "expression": "`attempted_at`"
+                    },
+                    {
+                      "name": "run_context",
+                      "expression": "`run_context`"
+                    },
+                    {
+                      "name": "startup_id",
+                      "expression": "`startup_id`"
+                    },
+                    {
+                      "name": "email_type",
+                      "expression": "`email_type`"
+                    },
+                    {
+                      "name": "attempt_label",
+                      "expression": "`attempt_label`"
+                    },
+                    {
+                      "name": "outcome",
+                      "expression": "`outcome`"
+                    },
+                    {
+                      "name": "outbox_state",
+                      "expression": "`outbox_state`"
+                    },
+                    {
+                      "name": "provider_message_id",
+                      "expression": "`provider_message_id`"
+                    },
+                    {
+                      "name": "detail",
+                      "expression": "`detail`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "attempt_id",
+                    "displayName": "#"
+                  },
+                  {
+                    "fieldName": "attempted_at",
+                    "displayName": "Time"
+                  },
+                  {
+                    "fieldName": "run_context",
+                    "displayName": "Context"
+                  },
+                  {
+                    "fieldName": "startup_id",
+                    "displayName": "Startup"
+                  },
+                  {
+                    "fieldName": "email_type",
+                    "displayName": "Email"
+                  },
+                  {
+                    "fieldName": "attempt_label",
+                    "displayName": "Attempt"
+                  },
+                  {
+                    "fieldName": "outcome",
+                    "displayName": "Outcome"
+                  },
+                  {
+                    "fieldName": "outbox_state",
+                    "displayName": "Outbox state"
+                  },
+                  {
+                    "fieldName": "provider_message_id",
+                    "displayName": "Provider msg id"
+                  },
+                  {
+                    "fieldName": "detail",
+                    "displayName": "Detail"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Outbox attempt log (Lakebase, mirrored)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 28,
+            "width": 12,
+            "height": 7
+          }
+        }
+      ]
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "canvasBackgroundColor": {
+        "light": "#FCFCFC",
+        "dark": "#1F272D"
+      },
+      "widgetBackgroundColor": {
+        "light": "#FFFFFF",
+        "dark": "#11171C"
+      },
+      "widgetBorderColor": {
+        "light": "#FFFFFF",
+        "dark": "#11171C"
+      },
+      "fontColor": {
+        "light": "#11171C",
+        "dark": "#E8ECF0"
+      },
+      "selectionColor": {
+        "light": "#2272B4",
+        "dark": "#8ACAFF"
+      },
+      "visualizationColors": [
+        "#0072B2",
+        "#E69F00",
+        "#009E73",
+        "#CC79A7",
+        "#D55E00",
+        "#56B4E9"
+      ],
+      "widgetHeaderAlignment": "LEFT"
+    }
+  }
+}

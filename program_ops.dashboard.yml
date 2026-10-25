@@ -1,0 +1,6 @@
+resources:
+  dashboards:
+    program_ops_evidence:
+      display_name: "Program Ops - case evidence"
+      file_path: ../src/program_ops_evidence.lvdash.json
+      warehouse_id: ${var.warehouse_id}

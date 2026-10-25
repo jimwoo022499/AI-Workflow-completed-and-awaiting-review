@@ -1,0 +1,46 @@
+resources:
+  jobs:
+    program_ops_showcase:
+      name: program_ops_showcase
+      description: "Verify the founder, acknowledge, reconcile both records, alert the program lead to approve or reject, then send the drafted decision email exactly once (fictional data)."
+      tags:
+        aidevkit_project: ai-dev-kit
+      # PERFORMANCE_OPTIMIZED: an interactive demo where a person waits on the result.
+      performance_target: PERFORMANCE_OPTIMIZED
+      max_concurrent_runs: 1
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+        - name: lakebase_endpoint
+          default: ${var.lakebase_endpoint}
+        - name: llm_endpoint
+          default: ${var.llm_endpoint}
+      tasks:
+        - task_key: setup_and_seed
+          notebook_task:
+            notebook_path: ../src/01_setup_and_seed.py
+        - task_key: tests
+          depends_on: [{task_key: setup_and_seed}]
+          notebook_task:
+            notebook_path: ../src/02_tests.py
+        - task_key: story_intake
+          depends_on: [{task_key: tests}]
+          notebook_task:
+            notebook_path: ../src/03_story_intake.py
+        - task_key: reviewer_decision
+          depends_on: [{task_key: story_intake}]
+          notebook_task:
+            notebook_path: ../src/04_reviewer_console.py
+            base_parameters:
+              reviewer_name: Jimmy Woo
+              reviewer_login: j.woo
+              final_status: APPROVED
+              reason: "Reviewed 2026-10-24: diligence complete and program completion confirmed. Tracker 'Completed' stands; the queue entry was stale. Approve."
+              decided_at: "2026-10-24 10:05:00"
+              action: submit
+        - task_key: story_send
+          depends_on: [{task_key: reviewer_decision}]
+          notebook_task:
+            notebook_path: ../src/05_story_send.py
